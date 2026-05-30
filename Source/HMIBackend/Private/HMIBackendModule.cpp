@@ -10,10 +10,6 @@
 	#include "OpenCV/OpenCVIncludesEnd.h"
 #endif
 
-#if HMI_WITH_GGML
-#include "ggml-backend.h"
-#endif
-
 #if ORT_API_MANUAL_INIT
 	#include "HMIThirdPartyBegin.h"
 	#include "onnxruntime_cxx_api.h"
@@ -24,6 +20,18 @@
 #if HMI_WITH_SHERPA
 	#include "HMIThirdPartyBegin.h"
 	#include "ONNX/SherpaLoader.h"
+	#include "HMIThirdPartyEnd.h"
+#endif
+
+#if HMI_WITH_OMNIVOICE
+	#include "HMIThirdPartyBegin.h"
+	#include "GGML/OmniVoiceLoader.h"
+	#include "HMIThirdPartyEnd.h"
+#endif
+
+#if HMI_WITH_QWENTTS
+	#include "HMIThirdPartyBegin.h"
+	#include "GGML/QwenTTSLoader.h"
 	#include "HMIThirdPartyEnd.h"
 #endif
 
@@ -57,17 +65,20 @@ void FHMIBackendModule::StartupModule()
 	}
 	#endif
 
-	#if HMI_WITH_GGML
-	UE_LOG(LogHMI, Verbose, TEXT("ggml_backend_load"));
-	ggml_backend_load_all_from_path(TCHAR_TO_ANSI(*UHMIStatics::GetPluginThirdPartyBinDir()));
-	const size_t GgmlDeviceCount = ggml_backend_dev_count();
-	for (size_t GgmlDeviceId = 0; GgmlDeviceId < GgmlDeviceCount; ++GgmlDeviceId)
+	#if HMI_WITH_WHISPER
+	WhisperHandle = FPlatformProcess::GetDllHandle(*UHMIStatics::GetPluginDllFilepath(TEXT("whisper")));
+	if (!WhisperHandle)
 	{
-		ggml_backend_dev_t GgmlDevice = ggml_backend_dev_get(GgmlDeviceId);
-		const char* GgmlDeviceName = ggml_backend_dev_name(GgmlDevice);
-		UE_LOG(LogHMI, Verbose, TEXT("ggml device: %s"), ANSI_TO_TCHAR(GgmlDeviceName));
+		UE_LOG(LogHMI, Error, TEXT("Failed to load whisper"));
 	}
-	UE_LOG(LogHMI, Verbose, TEXT("ggml_backend_load DONE"));
+	#endif
+
+	#if HMI_WITH_LLAMA
+	LlamaHandle = FPlatformProcess::GetDllHandle(*UHMIStatics::GetPluginDllFilepath(TEXT("llama")));
+	if (!LlamaHandle)
+	{
+		UE_LOG(LogHMI, Error, TEXT("Failed to load llama"));
+	}
 	#endif
 
 	#if HMI_WITH_ANY_ONNX
@@ -95,8 +106,23 @@ void FHMIBackendModule::StartupModule()
 			auto ApiBase = OrtGetApiBase_fp();
 			if (ensure(ApiBase))
 			{
-				auto Api = ApiBase->GetApi(ORT_API_VERSION);
-				if (ensure(Api))
+				// Безопасный каскадный поиск поддерживаемой версии API
+				const OrtApi* Api = nullptr;
+				uint32_t RequestVersion = ORT_API_VERSION;
+
+				while (RequestVersion > 0)
+				{
+					Api = ApiBase->GetApi(RequestVersion);
+					if (Api)
+					{
+						UE_LOG(LogHMI, Log, TEXT("[TTS_F5] ONNX Runtime API successfully bound using version %d (Header macro was %d)"), RequestVersion, ORT_API_VERSION);
+						break;
+					}
+					RequestVersion--; // Спускаемся на версию ниже, если текущая не поддерживается DLL-кой
+				}
+
+				// Проверяем, нашли ли мы хоть какую-то рабочую версию API
+				if (ensureMsgf(Api, TEXT("ONNX Runtime DLL does not support any API versions up to %d"), ORT_API_VERSION))
 				{
 					Ort::InitApi(Api);
 					bHaveOnnx = true;
@@ -113,6 +139,32 @@ void FHMIBackendModule::StartupModule()
 	{
 		UE_LOG(LogHMI, Error, TEXT("Failed to load sherpa-onnx-c-api"));
 		SherpaAPI.Reset();
+	}
+	#endif
+
+	#if HMI_WITH_OMNIVOICE
+	{
+		const FString OmniVoiceDllPath = UHMIStatics::GetPluginDllFilepath(TEXT("omnivoice"));
+		OmniVoiceAPI = MakeUnique<FOmniVoiceAPI>();
+		bHaveOmniVoice = LoadOmniVoiceAPI(OmniVoiceDllPath, *OmniVoiceAPI);
+		if (!bHaveOmniVoice)
+		{
+			UE_LOG(LogHMI, Error, TEXT("Failed to load omnivoice"));
+			OmniVoiceAPI.Reset();
+		}
+	}
+	#endif
+
+	#if HMI_WITH_QWENTTS
+	{
+		const FString QwenTTSDllPath = UHMIStatics::GetPluginDllFilepath(TEXT("qwen"));
+		QwenTTSAPI = MakeUnique<FQwenTTSAPI>();
+		bHaveQwenTTS = LoadQwenTTSAPI(QwenTTSDllPath, *QwenTTSAPI);
+		if (!bHaveQwenTTS)
+		{
+			UE_LOG(LogHMI, Error, TEXT("Failed to load qwen"));
+			QwenTTSAPI.Reset();
+		}
 	}
 	#endif
 
@@ -145,7 +197,7 @@ void FHMIBackendModule::StartupModule()
 		PiperAPI.Reset();
 	}
 	#endif
-	
+
 	#if HMI_WITH_OVRLIPSYNC
 	const FString OVRLipSyncDir = FPaths::GetPath(UHMIStatics::GetPluginDllFilepath(TEXT("OVRLipSync")));
 	bHaveOVRLipSync = FOVRLipSyncContext::Init(HMI_DEFAULT_SAMPLE_RATE, 4096, OVRLipSyncDir);
@@ -165,6 +217,38 @@ void FHMIBackendModule::ShutdownModule()
 	{
 		FOVRLipSyncContext::Shutdown();
 		bHaveOVRLipSync = false;
+	}
+	#endif
+
+	#if HMI_WITH_LLAMA
+	if (LlamaHandle)
+	{
+		FPlatformProcess::FreeDllHandle(LlamaHandle);
+		LlamaHandle = nullptr;
+	}
+	#endif
+
+	#if HMI_WITH_WHISPER
+	if (WhisperHandle)
+	{
+		FPlatformProcess::FreeDllHandle(WhisperHandle);
+		WhisperHandle = nullptr;
+	}
+	#endif
+
+	#if HMI_WITH_OMNIVOICE
+	if (bHaveOmniVoice)
+	{
+		OmniVoiceAPI.Reset();
+		bHaveOmniVoice = false;
+	}
+	#endif
+
+	#if HMI_WITH_QWENTTS
+	if (bHaveQwenTTS)
+	{
+		QwenTTSAPI.Reset();
+		bHaveQwenTTS = false;
 	}
 	#endif
 

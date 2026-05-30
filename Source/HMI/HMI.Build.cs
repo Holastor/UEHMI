@@ -17,6 +17,7 @@ public class HMI : ModuleRules
         PrivateDependencyModuleNames.AddRange(new string[] {
             "CoreUObject",
             "Engine",
+            "UMG",
             "Projects", // IPluginManager
 
             "AudioPlatformConfiguration", // FResampler

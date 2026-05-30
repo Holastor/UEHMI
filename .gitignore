@@ -77,6 +77,12 @@ DerivedDataCache/*
 !Source/ThirdParty/**/*.lib
 !Source/ThirdParty/**/*.dll
 
+# Exclude GPU-specific onnxruntime providers (CUDA/TensorRT) — too large for GitHub
+Source/ThirdParty/onnxruntime/lib/onnxruntime_providers_cuda.dll
+Source/ThirdParty/onnxruntime/lib/onnxruntime_providers_cuda.lib
+Source/ThirdParty/onnxruntime/lib/onnxruntime_providers_tensorrt.dll
+Source/ThirdParty/onnxruntime/lib/onnxruntime_providers_tensorrt.lib
+
 HMI_Data/*
 !HMI_Data/.dummy
 !HMI_Data/models.txt

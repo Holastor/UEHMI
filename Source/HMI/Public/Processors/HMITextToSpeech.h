@@ -17,6 +17,9 @@ struct HMI_API FHMITextToSpeechInput : public FHMIProcessorInput
 	UPROPERTY(BlueprintReadWrite, Category="HMI", meta=(ClampMin="0.01", ClampMax="10.0", UIMin="0.01", UIMax="10.0"))
 	float Speed = 1.0f;
 
+	using TChunkFunc = TFunction<void(const FName& /*UserTag*/, const FHMIWaveHandle& /*ChunkWave*/, bool /*EndOfStream*/)>;
+	TChunkFunc TTSChunkFunc;
+
 	FHMITextToSpeechInput() = default;
 
 	FHMITextToSpeechInput(FName InUserTag, FString InText, FString InVoiceId, float InSpeed)
@@ -44,7 +47,20 @@ struct HMI_API FHMITextToSpeechResult : public FHMIProcessorResult
 	{}
 };
 
+USTRUCT(BlueprintType, Category="HMI|TextToSpeech")
+struct HMI_API FHMITTSChunkOutput
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category="HMI")
+	FHMIWaveHandle ChunkWave;
+
+	UPROPERTY(BlueprintReadOnly, Category="HMI")
+	bool EndOfStream = false;
+};
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FHMIOnTextToSpeechComplete, const FHMITextToSpeechInput&, Input, const FHMITextToSpeechResult&, Result);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FHMIOnTTSChunk, FName, UserTag, const FHMITTSChunkOutput&, Chunk);
 
 UCLASS(BlueprintType, Abstract, ClassGroup="HMI|TextToSpeech")
 class HMI_API UHMITextToSpeech : public UHMIProcessor

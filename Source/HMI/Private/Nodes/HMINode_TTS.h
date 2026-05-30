@@ -14,12 +14,15 @@ class HMI_API UHMINode_TTS : public UBlueprintAsyncActionBase
 	UPROPERTY(BlueprintAssignable)
 	FHMIOnTextToSpeechComplete Complete;
 
+	UPROPERTY(BlueprintAssignable)
+	FHMIOnTTSChunk Chunk;
+
 	protected:
 
 	UFUNCTION(BlueprintCallable, Category="HMI|Async", meta=(DisplayName="TTS", BlueprintInternalUseOnly="true", WorldContext="WorldContextObject"))
 	static UHMINode_TTS* TTS_Async(
-		UObject* WorldContextObject, UHMIProcessor* Processor, 
-		FName UserTag, FString Text, FString VoiceId = TEXT("0"), float Speed = 1.0f);
+		UObject* WorldContextObject, UHMIProcessor* Processor,
+		FName UserTag, FString Text, FString VoiceId = TEXT("0"), float Speed = 1.0f, bool Streaming = false);
 
 	virtual void Activate() override;
 
@@ -40,4 +43,7 @@ class HMI_API UHMINode_TTS : public UBlueprintAsyncActionBase
 
 	UPROPERTY(Transient)
 	float Speed;
+
+	UPROPERTY(Transient)
+	bool Streaming;
 };

@@ -13,7 +13,7 @@ HMI_PROC_DECLARE_STATS(Chat_OpenAI)
 
 const FName UHMIChat_OpenAI::ImplName = TEXT("Chat_OpenAI");
 
-class UHMIChat* UHMIChat_OpenAI::GetOrCreateChat_OpenAI(UObject* WorldContextObject, 
+class UHMIChat* UHMIChat_OpenAI::GetOrCreateChat_OpenAI(UObject* WorldContextObject,
 	FName Name,
 	FString ModelName,
 	FString BackendUrl,
@@ -25,7 +25,6 @@ class UHMIChat* UHMIChat_OpenAI::GetOrCreateChat_OpenAI(UObject* WorldContextObj
 	if (BackendUrl.IsEmpty())
 	{
 		BackendUrl = TEXT("http://127.0.0.1:8080/v1/chat/completions");
-		//BackendUrl = TEXT("https://api.openai.com/v1/chat/completions");
 	}
 
 	Proc->SetProcessorParam("ModelName", ModelName);
@@ -40,35 +39,15 @@ UHMIChat_OpenAI::UHMIChat_OpenAI(const FObjectInitializer& ObjectInitializer) : 
 	ProviderName = ImplName;
 	ProcessorName = ImplName.ToString();
 
-	#if 1
-		SetProcessorParam("ModelName", TEXT("Llama-3.2_1b_Uncensored_RP_Aesir.gguf"));
-		SetProcessorParam("BackendUrl", TEXT("http://127.0.0.1:8080/v1/chat/completions"));
-		
-	#else
-		SetProcessorParam("ModelName", TEXT("gpt-5-nano"));
-		SetProcessorParam("BackendUrl", TEXT("https://api.openai.com/v1/chat/completions"));
-		SetProcessorParam("BackendKey", TEXT(""));
-	#endif
+	SetProcessorParam("ModelName", TEXT("Llama-3.2_1b_Uncensored_RP_Aesir.gguf"));
+	SetProcessorParam("BackendUrl", TEXT("http://127.0.0.1:8080/v1/chat/completions"));
+	SetProcessorParam("BackendKey", TEXT(""));
 
-	// api.openai.com
-
-	// What sampling temperature to use, between 0 and 2. Higher values like 0.8 will make the output more random, while lower values like 0.2 will make it more focused and deterministic. We generally recommend altering this or top_p but not both.
-	// temperature = 1.0
-
-	// An alternative to sampling with temperature, called nucleus sampling, where the model considers the results of the tokens with top_p probability mass. So 0.1 means only the tokens comprising the top 10% probability mass are considered.
-	// top_p = 1.0
-
-	// Number between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency in the text so far, decreasing the model's likelihood to repeat the same line verbatim.
-	// frequency_penalty = 0.0
-
-	// Number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far, increasing the model's likelihood to talk about new topics.
-	// presence_penalty = 0.0
-
-	// Constrains effort on reasoning for reasoning models. Currently supported values are none, minimal, low, medium, and high.
-	// reasoning_effort = "none"
-
-	// How many chat completion choices to generate for each input message. Note that you will be charged based on the number of generated tokens across all of the choices. Keep n as 1 to minimize costs.
-	// n = 1
+	SetProcessorParam("FrequencyPenalty", 0.0f);
+	SetProcessorParam("PresencePenalty", 0.0f);
+	SetProcessorParam("Seed", -1);
+	SetProcessorParam("N", 1);
+	SetProcessorParam("ReasoningEffort", TEXT(""));
 }
 
 UHMIChat_OpenAI::UHMIChat_OpenAI(FVTableHelper& Helper) : Super(Helper)
@@ -92,6 +71,12 @@ bool UHMIChat_OpenAI::Proc_Init()
 
 	ModelName = GetProcessorString("ModelName");
 	HMI_GUARD_PARAM_NOT_EMPTY(ModelName);
+
+	FrequencyPenalty = GetProcessorFloat("FrequencyPenalty");
+	PresencePenalty = GetProcessorFloat("PresencePenalty");
+	Seed = GetProcessorInt("Seed");
+	N = GetProcessorInt("N");
+	ReasoningEffort = GetProcessorString("ReasoningEffort");
 
 	HttpRequest = MakeUnique<FHMIHttpRequest>(BackendKey);
 	HttpRequest->OnProgress.BindUObject(this, &UHMIChat_OpenAI::OnHttpRequestProgress);
@@ -125,6 +110,41 @@ void UHMIChat_OpenAI::CancelOperation(bool PurgeQueue)
 		PurgeInputQueue(InputQueue);
 }
 
+static void EmitOptionalString(TSharedRef<FJsonObject> Obj, const TCHAR* Key, const FString& Val)
+{
+	if (!Val.IsEmpty())
+		Obj->SetStringField(Key, Val);
+}
+
+static void EmitOptionalNumber(TSharedRef<FJsonObject> Obj, const TCHAR* Key, double Val, double SkipVal)
+{
+	if (Val != SkipVal)
+		Obj->SetNumberField(Key, Val);
+}
+
+static void EmitOptionalInt(TSharedRef<FJsonObject> Obj, const TCHAR* Key, int Val, int SkipVal)
+{
+	if (Val != SkipVal)
+		Obj->SetNumberField(Key, (double)Val);
+}
+
+static void EmitOptionalStringArray(TSharedRef<FJsonObject> Obj, const TCHAR* Key, const TArray<FString>& Arr)
+{
+	if (Arr.Num() > 0)
+	{
+		TArray<TSharedPtr<FJsonValue>> JsonArr;
+		for (const FString& S : Arr)
+			JsonArr.Add(MakeShared<FJsonValueString>(S));
+		Obj->SetArrayField(Key, JsonArr);
+	}
+}
+
+static void EmitOptionalBool(TSharedRef<FJsonObject> Obj, const TCHAR* Key, bool Val, bool SkipVal)
+{
+	if (Val != SkipVal)
+		Obj->SetBoolField(Key, Val);
+}
+
 bool UHMIChat_OpenAI::Proc_DoWork(int& QueueLength)
 {
 	if (!DequeOperation(InputQueue, Operation, QueueLength))
@@ -146,7 +166,11 @@ bool UHMIChat_OpenAI::Proc_DoWork(int& QueueLength)
 	ErrorText.Reset();
 	DataChunkPos = 0;
 	BadChunkCount = 0;
+	CompletionTokens = 0;
+	PromptTokens = 0;
+	TotalTokens = 0;
 
+	// ---- build messages array ----
 	TArray<TSharedPtr<FJsonValue>> JsonMessages;
 
 	for (const auto& Msg : Operation.Input.History)
@@ -157,35 +181,92 @@ bool UHMIChat_OpenAI::Proc_DoWork(int& QueueLength)
 		JsonMessages.Add(MakeShared<FJsonValueObject>(JsonMsg));
 	}
 
-	TSharedRef<FJsonObject> JsonMsg = MakeShared<FJsonObject>();
-	JsonMsg->SetStringField(TEXT("role"), TEXT("user"));
-	JsonMsg->SetStringField(TEXT("content"), InputText);
-	JsonMessages.Add(MakeShared<FJsonValueObject>(JsonMsg));
+	{
+		TSharedRef<FJsonObject> JsonMsg = MakeShared<FJsonObject>();
+		JsonMsg->SetStringField(TEXT("role"), TEXT("user"));
+		JsonMsg->SetStringField(TEXT("content"), InputText);
+		JsonMessages.Add(MakeShared<FJsonValueObject>(JsonMsg));
+	}
 
-	// root node
+	// ---- root request object ----
 	TSharedRef<FJsonObject> JsonObject = MakeShared<FJsonObject>();
 	JsonObject->SetStringField(TEXT("model"), ModelName);
 	JsonObject->SetBoolField(TEXT("stream"), true);
 	JsonObject->SetArrayField(TEXT("messages"), JsonMessages);
 
-	// backend params
-	if (BackendUrl.Contains(TEXT("api.openai.com")))
+	// ---- sampling params (numbers, not strings) ----
+	EmitOptionalNumber(JsonObject, TEXT("temperature"), (double)Operation.Input.Temperature, 1.0);
+	EmitOptionalNumber(JsonObject, TEXT("top_p"), (double)Operation.Input.TopP, 1.0);
+
+	// max_tokens / max_completion_tokens
+	if (Operation.Input.MaxTokens > 0)
 	{
-		JsonObject->SetStringField(TEXT("max_completion_tokens"), LexToString(Operation.Input.MaxTokens));
-	}
-	else
-	{
-		JsonObject->SetStringField(TEXT("max_tokens"), LexToString(Operation.Input.MaxTokens));
+		// api.openai.com uses max_completion_tokens for newer models;
+		// most compatible backends (llama.cpp, ollama, vLLM) use max_tokens.
+		// Let the user override via BackendParams if needed.
+		const bool bUseMaxCompletionTokens = BackendUrl.Contains(TEXT("api.openai.com"));
+		JsonObject->SetNumberField(
+			bUseMaxCompletionTokens ? TEXT("max_completion_tokens") : TEXT("max_tokens"),
+			(double)Operation.Input.MaxTokens
+		);
 	}
 
-	JsonObject->SetStringField(TEXT("temperature"), LexToString(Operation.Input.Temperature));
-	JsonObject->SetStringField(TEXT("top_p"), LexToString(Operation.Input.TopP));
+	// frequency_penalty & presence_penalty
+	const float FreqPen = Operation.Input.BackendParams.Contains(TEXT("frequency_penalty"))
+		? FCString::Atof(*Operation.Input.BackendParams[TEXT("frequency_penalty")])
+		: FrequencyPenalty;
+	const float PresPen = Operation.Input.BackendParams.Contains(TEXT("presence_penalty"))
+		? FCString::Atof(*Operation.Input.BackendParams[TEXT("presence_penalty")])
+		: PresencePenalty;
+	EmitOptionalNumber(JsonObject, TEXT("frequency_penalty"), (double)FreqPen, 0.0);
+	EmitOptionalNumber(JsonObject, TEXT("presence_penalty"), (double)PresPen, 0.0);
 
+	// seed
+	const int SeedVal = Operation.Input.BackendParams.Contains(TEXT("seed"))
+		? FCString::Atoi(*Operation.Input.BackendParams[TEXT("seed")])
+		: Seed;
+	EmitOptionalInt(JsonObject, TEXT("seed"), SeedVal, -1);
+
+	// stop
+	EmitOptionalStringArray(JsonObject, TEXT("stop"), Operation.Input.Stop);
+
+	// n
+	const int NVal = Operation.Input.BackendParams.Contains(TEXT("n"))
+		? FCString::Atoi(*Operation.Input.BackendParams[TEXT("n")])
+		: N;
+	EmitOptionalInt(JsonObject, TEXT("n"), NVal, 1);
+
+	// reasoning_effort (for reasoning models)
+	const FString* ReasoningEffortOverride = Operation.Input.BackendParams.Find(TEXT("reasoning_effort"));
+	const FString& ReasoningEffortVal = ReasoningEffortOverride ? *ReasoningEffortOverride : ReasoningEffort;
+	if (!ReasoningEffortVal.IsEmpty())
+		JsonObject->SetStringField(TEXT("reasoning_effort"), ReasoningEffortVal);
+
+	// stream_options: include_usage
+	{
+		TSharedRef<FJsonObject> StreamOpts = MakeShared<FJsonObject>();
+		StreamOpts->SetBoolField(TEXT("include_usage"), true);
+		JsonObject->SetObjectField(TEXT("stream_options"), StreamOpts);
+	}
+
+	// ---- BackendParams override (pass-through as strings, preserving legacy compatibility) ----
 	for (const auto& Iter : Operation.Input.BackendParams)
 	{
-		JsonObject->SetStringField(Iter.Key, Iter.Value);
+		// Skip params we already handle natively
+		static const TSet<FString> NativeParams = {
+			TEXT("frequency_penalty"),
+			TEXT("presence_penalty"),
+			TEXT("seed"),
+			TEXT("n"),
+			TEXT("reasoning_effort")
+		};
+		if (!NativeParams.Contains(Iter.Key))
+		{
+			JsonObject->SetStringField(Iter.Key, Iter.Value);
+		}
 	}
 
+	// ---- serialize and send ----
 	FString Content;
 	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Content);
 	FJsonSerializer::Serialize(JsonObject, Writer);
@@ -207,12 +288,14 @@ void UHMIChat_OpenAI::Proc_PostWorkStats()
 
 void UHMIChat_OpenAI::OnHttpRequestProgress(const FAnsiString& ResponseAnsi, const FAnsiString& Chunk)
 {
-	// data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"XXX"}}],"created":1760371448,"id":"chatcmpl-asie3B4BpRtih8UlmoetL8rvFDttgTIk","model":"Llama-3.2-3B","system_fingerprint":"b6745-a31cf36a","object":"chat.completion.chunk"}\n\n
-	// data: {...}
-	// data: [DONE]
+	// SSE stream format:
+	//   data: {"id":"...","choices":[{"delta":{"content":"Hi"},"index":0}],...}\n\n
+	//   data: {"id":"...","choices":[{"delta":{},"finish_reason":"stop","index":0}],"usage":{...}}\n\n
+	//   data: [DONE]\n\n
 
-	static const FAnsiStringView DataPrefix(("data:"));
-	static const FAnsiStringView EndChunk(("\n\n"));
+	static const FAnsiStringView DataPrefix("data:");
+	static const FAnsiStringView EndChunk("\n\n");
+	static const FAnsiStringView DoneSentinel("[DONE]");
 
 	const int ResponseLen = ResponseAnsi.Len();
 	while (DataChunkPos < ResponseLen)
@@ -220,70 +303,85 @@ void UHMIChat_OpenAI::OnHttpRequestProgress(const FAnsiString& ResponseAnsi, con
 		FAnsiStringView StreamView(&ResponseAnsi[DataChunkPos], ResponseLen - DataChunkPos);
 
 		const int32 DataIndex = StreamView.Find(DataPrefix);
-		if (DataIndex == INDEX_NONE) // no data
+		if (DataIndex == INDEX_NONE)
 		{
-			DataChunkPos = ResponseLen; // skip whole chunk
+			DataChunkPos = ResponseLen;
 			break;
 		}
 
-		if (DataIndex > 0) // data in the middle
+		if (DataIndex > 0)
 		{
-			DataChunkPos += DataIndex; // seek to start
+			DataChunkPos += DataIndex;
 			continue;
 		}
 
 		const int32 EndChunkIndex = StreamView.Find(EndChunk);
 		if (EndChunkIndex == INDEX_NONE)
-		{
 			break;
-		}
 
 		DataChunkPos += (EndChunkIndex + EndChunk.Len());
 
+		const int32 ChunkBeginIndex = DataIndex + DataPrefix.Len();
+		FAnsiStringView Payload(&StreamView[ChunkBeginIndex], EndChunkIndex - ChunkBeginIndex);
+
+		// Trim leading whitespace
+		while (Payload.Len() > 0 && (Payload[0] == ' ' || Payload[0] == '\t'))
+			Payload = FAnsiStringView(&Payload[1], Payload.Len() - 1);
+
+		// Skip [DONE] sentinel
+		if (Payload.StartsWith(DoneSentinel))
+			continue;
+
+		int32 BracketIndex;
+		if (Payload.FindChar('{', BracketIndex))
 		{
-			const int32 ChunkBeginIndex = DataIndex + DataPrefix.Len();
-			FAnsiStringView Payload(&StreamView[ChunkBeginIndex], EndChunkIndex - ChunkBeginIndex);
+			FAnsiStringView JsonPayload(&Payload[BracketIndex], Payload.Len() - BracketIndex);
 
-			int32 BracketIndex;
-			if (Payload.FindChar(('{'), BracketIndex))
+			const FUTF8ToTCHAR Conv(JsonPayload.GetData(), JsonPayload.Len());
+			FString JsonString(Conv.Length(), Conv.Get());
+
+			TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::CreateFromView(JsonString);
+			TSharedPtr<FJsonObject> JsonObject;
+			if (!FJsonSerializer::Deserialize(Reader, JsonObject))
 			{
-				const FUTF8ToTCHAR Conv(Payload.GetData(), Payload.Len());
-				FString JsonString(Conv);
+				++BadChunkCount;
+				continue;
+			}
 
-				TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::CreateFromView(JsonString);
-				TSharedPtr<FJsonObject> JsonObject;
-				if (!FJsonSerializer::Deserialize(Reader, JsonObject))
+			FOpenAIChatCompletionResponse OpenAIResponse;
+			if (!FJsonObjectConverter::JsonObjectToUStruct(JsonObject.ToSharedRef(), &OpenAIResponse))
+			{
+				++BadChunkCount;
+				continue;
+			}
+
+			// Backend error
+			if (!OpenAIResponse.error.code.IsEmpty() || !OpenAIResponse.error.message.IsEmpty())
+			{
+				ErrorText = FString::Printf(TEXT(LOGPREFIX "Backend error: code=%s type=%s message=%s"),
+					*OpenAIResponse.error.code, *OpenAIResponse.error.type, *OpenAIResponse.error.message);
+				++BadChunkCount;
+				continue;
+			}
+
+			// Delta content (streaming)
+			for (const auto& Choice : OpenAIResponse.choices)
+			{
+				if (!Choice.delta.content.IsEmpty())
 				{
-					//ErrorText = TEXT("Deserialize");
-					++BadChunkCount;
-				}
-				else
-				{
-					FOpenAIChatCompletionResponse OpenAIResponse;
-					if (!FJsonObjectConverter::JsonObjectToUStruct(JsonObject.ToSharedRef(), &OpenAIResponse))
-					{
-						//ErrorText = TEXT("JsonObjectToUStruct");
-						++BadChunkCount;
-					}
-					else
-					{
-						if (!OpenAIResponse.error.code.IsEmpty() || !OpenAIResponse.error.message.IsEmpty())
-						{
-							ErrorText = FString::Printf(TEXT(LOGPREFIX "Backend error: code=%s message=%s"), *OpenAIResponse.error.code, *OpenAIResponse.error.message);
-							++BadChunkCount;
-						}
-						else
-						{
-							if (!OpenAIResponse.choices.IsEmpty() && !OpenAIResponse.choices[0].delta.content.IsEmpty())
-							{
-								HandleDeltaContent(Operation.Input, MoveTemp(OpenAIResponse.choices[0].delta.content));
-							}
-						}
-					}
+					HandleDeltaContent(Operation.Input, FString(Choice.delta.content));
 				}
 			}
+
+			// Accumulate usage from final chunk
+			if (OpenAIResponse.usage.total_tokens > 0)
+			{
+				PromptTokens = OpenAIResponse.usage.prompt_tokens;
+				CompletionTokens = OpenAIResponse.usage.completion_tokens;
+				TotalTokens = OpenAIResponse.usage.total_tokens;
+			}
 		}
-	} 
+	}
 }
 
 void UHMIChat_OpenAI::OnHttpRequestComplete(const FAnsiString& ResponseAnsi, int ErrorCode)
@@ -306,7 +404,8 @@ void UHMIChat_OpenAI::OnHttpRequestComplete(const FAnsiString& ResponseAnsi, int
 			FOpenAIChatCompletionResponse OpenAIResponse;
 			if (FJsonObjectConverter::JsonObjectToUStruct(JsonObject.ToSharedRef(), &OpenAIResponse))
 			{
-				ErrorText = FString::Printf(TEXT("Backend error: code=%s message=%s"), *OpenAIResponse.error.code, *OpenAIResponse.error.message);
+				ErrorText = FString::Printf(TEXT("Backend error: code=%s type=%s message=%s"),
+					*OpenAIResponse.error.code, *OpenAIResponse.error.type, *OpenAIResponse.error.message);
 				return;
 			}
 		}
@@ -320,8 +419,21 @@ void UHMIChat_OpenAI::OnHttpRequestComplete(const FAnsiString& ResponseAnsi, int
 		ErrorText = TEXT("Stream error");
 		return;
 	}
+
+	UE_LOG(LogHMI, Verbose, TEXT(LOGPREFIX "Usage: prompt=%d completion=%d total=%d"),
+		PromptTokens, CompletionTokens, TotalTokens);
 }
 
 #endif // HMI_WITH_OPENAI_CHAT
 
 #undef LOGPREFIX
+
+// ---- Console variable for BP text chat input ----
+//   Set in console:  ChatText Your message here
+//   Read in BP:      Get Console Variable String "ChatText"
+static TAutoConsoleVariable<FString> CVarChatText(
+	TEXT("ChatText"),
+	TEXT(""),
+	TEXT("Text to send to chat. Write in console, read in BP via Get Console Variable String."),
+	ECVF_Default
+);

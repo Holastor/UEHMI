@@ -38,13 +38,31 @@ struct HMI_API FHMIChatInput : public FHMIProcessorInput
 	UPROPERTY(BlueprintReadWrite, Category="HMI")
 	float TopP = 1.0f;
 
+	UPROPERTY(BlueprintReadWrite, Category="HMI")
+	float FrequencyPenalty = 0.0f;
+
+	UPROPERTY(BlueprintReadWrite, Category="HMI")
+	float PresencePenalty = 0.0f;
+
+	UPROPERTY(BlueprintReadWrite, Category="HMI")
+	int Seed = -1;
+
+	UPROPERTY(BlueprintReadWrite, Category="HMI")
+	TArray<FString> Stop;
+
+	UPROPERTY(BlueprintReadWrite, Category="HMI")
+	int N = 1;
+
+	UPROPERTY(BlueprintReadWrite, Category="HMI")
+	FString ReasoningEffort;
+
 	using TProgressFunc = TFunction<void(const FName& /*UserTag*/, const FString& /*Text*/, bool /*EndOfText*/)>;
 	TProgressFunc ChatDeltaFunc; // SPAM WARNING!
 	TProgressFunc ChatBatchFunc;
 
 	FHMIChatInput() = default;
 
-	FHMIChatInput(FName InUserTag, FString InText, 
+	FHMIChatInput(FName InUserTag, FString InText,
 		TArray<FHMIChatMessage> InHistory, TMap<FString, FString> InBackendParams,
 		int InMaxTokens = 0, float InTemperature = 1.0f, float InTopP = 1.0f)
 	{

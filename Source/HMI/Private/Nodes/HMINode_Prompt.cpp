@@ -1,10 +1,13 @@
 #include "HMINode_Prompt.h"
 #include "HMISubsystem.h"
 
-UHMINode_Prompt* UHMINode_Prompt::Prompt_Async(UObject* WorldContextObject, UHMIProcessor* Processor, 
-	FName UserTag, FString Text, 
-	TArray<FHMIChatMessage> History, TMap<FString, FString> BackendParams, 
-	int MaxTokens, float Temperature, float TopP, bool Streaming
+UHMINode_Prompt* UHMINode_Prompt::Prompt_Async(UObject* WorldContextObject, UHMIProcessor* Processor,
+	FName UserTag, FString Text,
+	TArray<FHMIChatMessage> History, TMap<FString, FString> BackendParams,
+	const TArray<FString>& Stop,
+	int MaxTokens, float Temperature, float TopP, bool Streaming,
+	float FrequencyPenalty, float PresencePenalty,
+	int Seed, int N, const FString& ReasoningEffort
 )
 {
 	UHMINode_Prompt* Node = NewObject<UHMINode_Prompt>();
@@ -17,6 +20,12 @@ UHMINode_Prompt* UHMINode_Prompt::Prompt_Async(UObject* WorldContextObject, UHMI
 	Node->MaxTokens = MaxTokens;
 	Node->Temperature = Temperature;
 	Node->TopP = TopP;
+	Node->FrequencyPenalty = FrequencyPenalty;
+	Node->PresencePenalty = PresencePenalty;
+	Node->Seed = Seed;
+	Node->Stop = Stop;
+	Node->N = N;
+	Node->ReasoningEffort = ReasoningEffort;
 	Node->Streaming = Streaming;
 	return Node;
 }
@@ -35,6 +44,13 @@ void UHMINode_Prompt::Activate()
 			{
 				FHMIChatInput Input(MoveTemp(UserTag), MoveTemp(Text), MoveTemp(History), MoveTemp(BackendParams), MaxTokens, Temperature, TopP);
 
+				Input.FrequencyPenalty = FrequencyPenalty;
+				Input.PresencePenalty = PresencePenalty;
+				Input.Seed = Seed;
+				Input.Stop = Stop;
+				Input.N = N;
+				Input.ReasoningEffort = ReasoningEffort;
+
 				if (Streaming)
 				{
 					Input.ChatBatchFunc = [this](const FName& UserTag, const FString& Batch, bool EndOfText)
@@ -42,7 +58,7 @@ void UHMINode_Prompt::Activate()
 						AsyncTask(ENamedThreads::GameThread, [this, UserTag = FName(UserTag), Batch = FString(Batch), EndOfText]()
 						{
 							Progress.Broadcast(UserTag, Batch, EndOfText);
-							if (EndOfText) 
+							if (EndOfText)
 								SetReadyToDestroy();
 						});
 					};
@@ -51,10 +67,10 @@ void UHMINode_Prompt::Activate()
 				{
 					Input.CompleteFunc = [this](FHMIProcessorInput& ProcInput, FHMIProcessorResult& ProcResult)
 					{
-						auto& Input = static_cast<FHMIChatInput&>(ProcInput);
+						auto& ChatInput = static_cast<FHMIChatInput&>(ProcInput);
 						auto& Result = static_cast<FHMIChatResult&>(ProcResult);
 
-						AsyncTask(ENamedThreads::GameThread, [this, Input = MoveTemp(Input), Result = MoveTemp(Result)]() mutable
+						AsyncTask(ENamedThreads::GameThread, [this, ChatInput = MoveTemp(ChatInput), Result = MoveTemp(Result)]() mutable
 						{
 							Progress.Broadcast(UserTag, Result.Text, /*EndOfText*/true);
 							SetReadyToDestroy();

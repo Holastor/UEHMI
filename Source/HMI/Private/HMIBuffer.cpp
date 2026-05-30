@@ -142,6 +142,7 @@ bool UHMIBufferStatics::IsValidSampleRate(int SampleRate)
 		case 11025: // Used for lower-quality PCM, MPEG audio and for audio analysis of subwoofer bandpasses.
 		case 16000: // Used in most VoIP and VVoIP, extension of telephone narrowband.
 		case 22050: // Used for lower-quality PCM and MPEG audio and for audio analysis of low frequency energy.
+		case 24000: // Used by OmniVoice and other neural TTS codecs.
 		case 44100: // Audio CD, most commonly used rate with MPEG-1 audio (VCD, SVCD, MP3). Covers the 20 kHz bandwidth.
 		case 48000: // Standard sampling rate used by professional digital video equipment, could reconstruct frequencies up to 22 kHz.
 			return true;

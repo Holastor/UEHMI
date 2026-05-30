@@ -10,6 +10,10 @@
 
 #include "GGML/HMIChat_Llama.h"
 #include "GGML/HMISpeechToText_Whisper.h"
+#if HMI_WITH_OMNIVOICE
+#include "GGML/HMITextToSpeech_OmniVoice.h"
+#include "GGML/HMITextToSpeech_QwenTTS.h"
+#endif
 
 #include "ONNX/HMITextToSpeech_Sherpa.h"
 #include "ONNX/HMISpeechToText_Sherpa.h"
@@ -100,6 +104,20 @@ void UHMIBackendSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		HMI->SetDefaultProvider(EHMIProcessorType::STT, UHMISpeechToText_Whisper::ImplName);
 	#endif
 
+	#if HMI_WITH_OMNIVOICE
+		if (Module.HaveOmniVoice())
+		{
+			HMI_REGISTER_PROVIDER(UHMITextToSpeech_OmniVoice);
+		}
+	#endif
+
+	#if HMI_WITH_QWENTTS
+		if (Module.HaveQwenTTS())
+		{
+			HMI_REGISTER_PROVIDER(UHMITextToSpeech_QwenTTS);
+		}
+	#endif
+
 	// ONNX
 
 	#if HMI_WITH_SHERPA
@@ -169,6 +187,28 @@ void UHMIBackendSubsystem::Deinitialize()
 void UHMIBackendSubsystem::OnProcessorCreated(UHMIProcessor* Processor)
 {
 	FHMIBackendModule& Module = FHMIBackendModule::Get();
+
+	#if HMI_WITH_OMNIVOICE
+		if (Module.HaveOmniVoice())
+		{
+			if (auto* OVTTS = Cast<UHMITextToSpeech_OmniVoice>(Processor))
+			{
+				OVTTS->SetOmniVoiceAPI(Module.GetOmniVoiceAPI());
+				return;
+			}
+		}
+	#endif
+
+	#if HMI_WITH_QWENTTS
+		if (Module.HaveQwenTTS())
+		{
+			if (auto* QTTTS = Cast<UHMITextToSpeech_QwenTTS>(Processor))
+			{
+				QTTTS->SetQwenTTSAPI(Module.GetQwenTTSAPI());
+				return;
+			}
+		}
+	#endif
 
 	#if HMI_WITH_SHERPA
 		if (Module.HaveSherpa())

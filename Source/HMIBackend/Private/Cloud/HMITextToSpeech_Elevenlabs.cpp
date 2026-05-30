@@ -44,6 +44,7 @@ UHMITextToSpeech_Elevenlabs::UHMITextToSpeech_Elevenlabs(const FObjectInitialize
 	SetProcessorParam("VoiceId", TEXT("54Cze5LrTSyLgbO6Fhlc"));
 
 	// elevenlabs specific
+	SetProcessorParam("ModelId", TEXT("eleven_multilingual_v2"));
 	SetProcessorParam("backend_output_format", TEXT("pcm_16000")); // only pcm implemented
 
 	// impl specific
@@ -71,6 +72,8 @@ bool UHMITextToSpeech_Elevenlabs::Proc_Init()
 
 	VoiceId = GetProcessorString("VoiceId");
 	HMI_GUARD_PARAM_NOT_EMPTY(VoiceId);
+
+	ModelId = GetProcessorString("ModelId");
 
 	BackendOutputFormat = GetProcessorString("backend_output_format");
 	HMI_GUARD_PARAM_NOT_EMPTY(BackendOutputFormat);
@@ -122,13 +125,15 @@ bool UHMITextToSpeech_Elevenlabs::InitSocket()
 
 	IsConnectPending = false;
 	IsContextInitialized = false;
+	ConnectionErrorString.Reset();
 
 	// wss://api.elevenlabs.io/v1/text-to-speech/:voice_id/stream-input
 	// wss://api.elevenlabs.io/v1/text-to-speech/:voice_id/multi-stream-input
 
 	FString Url = BackendUrl;
 	Url.Append(VoiceId);
-	Url.Append(TEXT("/multi-stream-input"));
+	Url.Append(TEXT("/multi-stream-input?model_id="));
+	Url.Append(ModelId);
 
 	FString Protocol;
 	TMap<FString, FString> UpgradeHeaders;
@@ -146,6 +151,7 @@ bool UHMITextToSpeech_Elevenlabs::InitSocket()
 	CbConnectionError = WebSocket->OnConnectionError().AddLambda([this](const FString& Error)
 	{
 		IsConnectPending = false;
+		ConnectionErrorString = Error;
 		UE_LOG(LogHMI, Error, TEXT(LOGPREFIX "Connection error: %s"), *Error);
 	});
 
@@ -188,6 +194,7 @@ void UHMITextToSpeech_Elevenlabs::ResetSocket()
 
 	IsConnectPending = false;
 	IsContextInitialized = false;
+	ConnectionErrorString.Reset();
 }
 
 void UHMITextToSpeech_Elevenlabs::SendJson(const TSharedRef<FJsonObject>& Obj)
@@ -205,10 +212,10 @@ void UHMITextToSpeech_Elevenlabs::SendMsg(const FString& Msg)
 
 	FScopeLock LOCK(&WebSocketMux);
 
-	if (!WebSocket->IsConnected() && !IsConnectPending)
+	if (!WebSocket->IsConnected())
 	{
-		IsConnectPending = true;
-		WebSocket->Connect();
+		UE_LOG(LogHMI, Error, TEXT(LOGPREFIX "SendMsg: socket not connected"));
+		return;
 	}
 
 	UE_LOG(LogHMI, VeryVerbose, TEXT(LOGPREFIX "Send: %s"), *Msg);
@@ -262,6 +269,39 @@ bool UHMITextToSpeech_Elevenlabs::Proc_DoWork(int& QueueLength)
 	// text should end with space
 	if (!Text.EndsWith(TEXT(" ")))
 		Text.AppendChar(TEXT(' '));
+
+	// Ensure WebSocket is connected before sending
+	{
+		FScopeLock LOCK(&WebSocketMux);
+		if (!WebSocket->IsConnected() && !IsConnectPending)
+		{
+			IsConnectPending = true;
+			ConnectionErrorString.Reset();
+			WebSocket->Connect();
+		}
+	}
+
+	if (IsConnectPending)
+	{
+		const double ConnectStartTime = GetTimestamp();
+		while (IsConnectPending)
+		{
+			if (GetTimestamp() - ConnectStartTime > OperationTimeout)
+			{
+				ErrorText = TEXT("Connection timeout");
+				HandleOperationComplete(false, MoveTemp(ErrorText), MoveTemp(Operation.Input), {});
+				return false;
+			}
+			FPlatformProcess::Sleep(0.005f);
+		}
+
+		if (!WebSocket->IsConnected())
+		{
+			ErrorText = FString::Printf(TEXT("Connection failed: %s"), *ConnectionErrorString);
+			HandleOperationComplete(false, MoveTemp(ErrorText), MoveTemp(Operation.Input), {});
+			return false;
+		}
+	}
 
 	if (!IsContextInitialized)
 	{

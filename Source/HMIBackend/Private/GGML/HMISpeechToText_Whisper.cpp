@@ -1,4 +1,4 @@
-#include "GGML/HMISpeechToText_Whisper.h"
+﻿#include "GGML/HMISpeechToText_Whisper.h"
 #include "HMIProcessorImpl.h"
 #include "HMISubsystemStatics.h"
 
@@ -105,6 +105,20 @@ bool UHMISpeechToText_Whisper::Proc_Init()
 	UE_LOG(LogHMI, Verbose, TEXT(LOGPREFIX "ModelPath: %s"), *ModelPath);
 	UE_LOG(LogHMI, Verbose, TEXT(LOGPREFIX "NumThreads: %d"), NumThreads);
 	UE_LOG(LogHMI, Verbose, TEXT(LOGPREFIX "Accelerate: %d"), Accelerate ? 1 : 0);
+
+	// Pre-load whisper.dll with full path so the delay-load helper finds it.
+	// The MSVC delay-load helper may not search AddDllDirectory paths,
+	// so the PushDllDirectory call in module startup doesn't help.
+	{
+		const FString WhisperDllPath = UHMIStatics::GetPluginDllFilepath(TEXT("whisper"));
+		UE_LOG(LogHMI, Verbose, TEXT(LOGPREFIX "Pre-loading whisper DLL: %s"), *WhisperDllPath);
+		void* PreloadHandle = FPlatformProcess::GetDllHandle(*WhisperDllPath);
+		if (!PreloadHandle)
+		{
+			UE_LOG(LogHMI, Error, TEXT(LOGPREFIX "Failed to load whisper DLL. Missing GPU runtime (CUDA/Vulkan) or CPU-only build required."));
+			return false;
+		}
+	}
 
 	whisper_log_set(&WhisperLogCallback, nullptr);
 

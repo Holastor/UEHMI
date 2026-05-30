@@ -71,6 +71,7 @@ class HMIBACKEND_API UHMITextToSpeech_Elevenlabs :
 	FString BackendUrl;
 	FString BackendKey;
 	FString VoiceId;
+	FString ModelId;
 	FString BackendOutputFormat;
 	int BackendSampleRate = 0;
 	int BackendNumChannels = 0;
@@ -84,6 +85,7 @@ class HMIBACKEND_API UHMITextToSpeech_Elevenlabs :
 	FDelegateHandle CbMessage;
 	bool IsConnectPending = false;
 	bool IsContextInitialized = false;
+	FString ConnectionErrorString;
 
 	bool IsOperationPending = false;
 	bool OperationSuccess = false;

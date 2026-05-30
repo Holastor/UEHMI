@@ -57,10 +57,19 @@ class HMIBACKEND_API UHMIChat_OpenAI :
 	FString BackendUrl;
 	FString BackendKey;
 
+	float FrequencyPenalty = 0.0f;
+	float PresencePenalty = 0.0f;
+	int Seed = -1;
+	int N = 1;
+	FString ReasoningEffort;
 	TUniquePtr<class FHMIHttpRequest> HttpRequest;
 	FString ErrorText;
 	int DataChunkPos = 0;
 	int BadChunkCount = 0;
+
+	int CompletionTokens = 0;
+	int PromptTokens = 0;
+	int TotalTokens = 0;
 
 	#endif // HMI_WITH_OPENAI_CHAT
 

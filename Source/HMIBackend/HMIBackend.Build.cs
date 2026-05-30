@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using UnrealBuildTool;
 
@@ -36,6 +36,8 @@ public class HMIBackend : ModuleRules
         bool WithGgml = true; // MIT
         bool WithWhisper = true && WithGgml; // MIT
         bool WithLlama = true && WithGgml; // MIT
+        bool WithOmniVoice = true && WithGgml; // MIT
+        bool WithQwenTTS = true && WithGgml; // MIT
 
         // not compatible with UE NNERuntimeORT
         bool WithCustomOnnx = true; // MIT
@@ -75,6 +77,8 @@ public class HMIBackend : ModuleRules
         EnableProvider("HMI_WITH_CUSTOM_ONNX", WithCustomOnnx);
         EnableProvider("HMI_WITH_ANY_ONNX", WithAnyOnnx);
         EnableProvider("HMI_WITH_SHERPA", WithSherpa);
+        EnableProvider("HMI_WITH_OMNIVOICE", WithOmniVoice);
+        EnableProvider("HMI_WITH_QWENTTS", WithQwenTTS);
         EnableProvider("HMI_WITH_PIPER", WithPiper);
         EnableProvider("HMI_WITH_FER", WithFER);
 
@@ -91,6 +95,16 @@ public class HMIBackend : ModuleRules
         if (WithGgml)
         {
             PrivateIncludePaths.Add(Path.Combine(ThirdPartyDir, "ggml", "include"));
+        }
+
+        if (WithOmniVoice)
+        {
+            PrivateIncludePaths.Add(Path.Combine(ThirdPartyDir, "omnivoice", "include"));
+        }
+
+        if (WithQwenTTS)
+        {
+            PrivateIncludePaths.Add(Path.Combine(ThirdPartyDir, "qwentts", "include"));
         }
 
         if (WithWhisper)
@@ -172,21 +186,21 @@ public class HMIBackend : ModuleRules
             if (WithGgml)
             {
                 string Prefix = Path.Combine(ThirdPartyDir, "ggml");
-                PublicAdditionalLibraries.Add(Path.Combine(Prefix, "lib", "ggml.lib"));
-                PublicAdditionalLibraries.Add(Path.Combine(Prefix, "lib", "ggml-base.lib"));
-
-                AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "ggml.dll", true);
-                AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "ggml-base.dll", true);
-
-                // backends (dynload)
+                AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "ggml.dll");
+                AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "ggml-base.dll");
+                AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "ggml-cpu.dll");
+                AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "ggml-cuda.dll");
+					// CPU backend variants — loaded by ggml_backend_load_best("cpu") at runtime
+					AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "ggml-cpu-x64.dll", true);
+					AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "ggml-cpu-sse42.dll", true);
+					AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "ggml-cpu-sandybridge.dll", true);
+					AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "ggml-cpu-haswell.dll", true);
+					AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "ggml-cpu-skylakex.dll", true);
+					AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "ggml-cpu-cannonlake.dll", true);
+					AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "ggml-cpu-cascadelake.dll", true);
+					AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "ggml-cpu-icelake.dll", true);
+					AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "ggml-cpu-alderlake.dll", true);
                 AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "ggml-vulkan.dll");
-                //AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "ggml-cuda.dll");
-
-                var files = Directory.EnumerateFiles(Path.Combine(Prefix, "bin"), "ggml-cpu-*.dll", SearchOption.TopDirectoryOnly);
-                foreach (var file in files)
-                {
-                    AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), Path.GetFileName(file));
-                }
             }
 
             if (WithWhisper)
@@ -201,6 +215,20 @@ public class HMIBackend : ModuleRules
                 string Prefix = Path.Combine(ThirdPartyDir, "llamacpp");
                 PublicAdditionalLibraries.Add(Path.Combine(Prefix, "lib", "llama.lib"));
                 AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "bin"), "llama.dll", true);
+            }
+
+            if (WithOmniVoice) // dynload
+            {
+                string Prefix = Path.Combine(ThirdPartyDir, "omnivoice");
+                PublicAdditionalLibraries.Add(Path.Combine(Prefix, "lib", "omnivoice.lib"));
+                AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "lib"), "omnivoice.dll");
+            }
+
+            if (WithQwenTTS) // dynload
+            {
+                string Prefix = Path.Combine(ThirdPartyDir, "qwentts");
+                PublicAdditionalLibraries.Add(Path.Combine(Prefix, "lib", "qwen.lib"));
+                AddDll(ThirdPartyBinDir, Path.Combine(Prefix, "lib"), "qwen.dll");
             }
 
             string OnnxBinariesDir = "";
@@ -289,17 +317,28 @@ public class HMIBackend : ModuleRules
         if (!File.Exists(FinalPath) || !FilesEqual(SrcPath, FinalPath))
         {
             File.Copy(SrcPath, FinalPath, true);
-
-            /*string SrcPdb = SrcPath.Replace(".dll", ".pdb");
-            if (File.Exists(SrcPdb))
-            {
-                string DstPdb = FinalPath.Replace(".dll", ".pdb");
-                File.Copy(SrcPdb, DstPdb, true);
-            }*/
         }
 
         if (DelayLoad)
+        {
             PublicDelayLoadDLLs.Add(Name);
+
+            // Also copy to the main module binary directory so the MSVC
+            // delay-load helper can find the DLL at runtime. The helper
+            // searches the loading module's directory, not AddDllDirectory
+            // paths.
+            string MainBinDir = Path.GetFullPath(Path.Combine(PluginDirectory, "Binaries", Target.Platform.ToString()));
+            if (BinaryOutputDir != MainBinDir)
+            {
+                Directory.CreateDirectory(MainBinDir);
+                string MainBinPath = Path.Combine(MainBinDir, Name);
+                if (!File.Exists(MainBinPath) || !FilesEqual(SrcPath, MainBinPath))
+                {
+                    File.Copy(SrcPath, MainBinPath, true);
+                }
+                RuntimeDependencies.Add(MainBinPath);
+            }
+        }
 
         RuntimeDependencies.Add(FinalPath);
     }
@@ -307,6 +346,7 @@ public class HMIBackend : ModuleRules
     private void AddOnnx(string ThirdPartyBinDir, string Prefix, bool DelayLoad = false)
     {
         AddDll(ThirdPartyBinDir, Prefix, "onnxruntime.dll", DelayLoad);
+        AddDll(ThirdPartyBinDir, Prefix, "onnxruntime_providers_shared.dll");
         AddDll(ThirdPartyBinDir, Prefix, "DirectML.dll");
         AddDll(ThirdPartyBinDir, Prefix, "DirectML.Debug.dll");
     }

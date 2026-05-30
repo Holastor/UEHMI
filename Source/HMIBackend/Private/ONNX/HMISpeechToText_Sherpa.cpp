@@ -1,4 +1,4 @@
-#include "ONNX/HMISpeechToText_Sherpa.h"
+﻿#include "ONNX/HMISpeechToText_Sherpa.h"
 #include "HMIProcessorImpl.h"
 #include "HMISubsystemStatics.h"
 
@@ -120,6 +120,30 @@ UHMISpeechToText_Sherpa::UHMISpeechToText_Sherpa(const FObjectInitializer& Objec
 	SetProcessorParam("wenet_ctc.tokens", DefTokens);
 	SetProcessorParam("wenet_ctc.model", AnyModel);
 
+		SetProcessorParam("qwen3_asr.conv_frontend", TEXT("*conv_frontend*.onnx"));
+		SetProcessorParam("qwen3_asr.encoder", DefEncoder);
+		SetProcessorParam("qwen3_asr.decoder", DefDecoder);
+		SetProcessorParam("qwen3_asr.tokenizer", TEXT("tokenizer"));
+		SetProcessorParam("qwen3_asr.max_total_len", 2048);
+		SetProcessorParam("qwen3_asr.max_new_tokens", 512);
+		SetProcessorParam("qwen3_asr.temperature", 0.0f);
+		SetProcessorParam("qwen3_asr.top_p", 1.0f);
+		SetProcessorParam("qwen3_asr.seed", -1);
+		SetProcessorParam("qwen3_asr.hotwords", TEXT(""));
+
+		SetProcessorParam("cohere_transcribe.encoder", DefEncoder);
+		SetProcessorParam("cohere_transcribe.decoder", DefDecoder);
+		SetProcessorParam("cohere_transcribe.language", TEXT(""));
+		SetProcessorParam("cohere_transcribe.use_punct", 1);
+		SetProcessorParam("cohere_transcribe.tokens", DefTokens);
+		SetProcessorParam("cohere_transcribe.use_itn", 1);
+
+		SetProcessorParam("funasr_nano.encoder_adaptor", TEXT("*encoder_adaptor*.onnx"));
+		SetProcessorParam("funasr_nano.embedding", TEXT("*embedding*.onnx"));
+		SetProcessorParam("funasr_nano.llm", TEXT("*llm*.onnx"));
+		SetProcessorParam("funasr_nano.tokenizer", TEXT("Qwen3-0.6B"));
+		SetProcessorParam("funasr_nano.itn", 1);
+
 	SetProcessorParam("t_one_ctc.tokens", DefTokens); // online
 	SetProcessorParam("t_one_ctc.model", AnyModel); // online
 }
@@ -216,7 +240,7 @@ bool UHMISpeechToText_Sherpa::Proc_Init()
 		recognizer_config.rule2_min_trailing_silence = Helper.GetFloat("rule2_min_trailing_silence");
 		recognizer_config.rule3_min_utterance_length = Helper.GetFloat("rule3_min_utterance_length");
 
-		if (IsTransducer)
+		if (IsTransducer || (ModelName.Contains(TEXT("nemo")) && ModelName.Contains(TEXT("transducer"))))
 		{
 			SHERPA_REQUIRED_PATH(config.tokens, "transducer.tokens", Node_File);
 			SHERPA_REQUIRED_PATH(config.transducer.encoder, "transducer.encoder", Node_File);
@@ -284,7 +308,7 @@ bool UHMISpeechToText_Sherpa::Proc_Init()
 
 		recognizer_config.decoding_method = Helper.GetStr("decoding_method");
 
-		if (IsTransducer || ModelName.Contains(TEXT("nemo-parakeet")))
+		if (IsTransducer || ModelName.Contains(TEXT("nemo-parakeet")) || (ModelName.Contains(TEXT("nemo")) && ModelName.Contains(TEXT("transducer"))))
 		{
 			SHERPA_REQUIRED_PATH(config.tokens, "transducer.tokens", Node_File);
 			SHERPA_REQUIRED_PATH(config.transducer.encoder, "transducer.encoder", Node_File);
@@ -354,7 +378,44 @@ bool UHMISpeechToText_Sherpa::Proc_Init()
 			config.canary.tgt_lang = Helper.GetStr("canary.tgt_lang", NullIfEmpty);
 			config.canary.use_pnc = Helper.GetInt("canary.use_pnc");
 		}
-		else if (ModelName.Contains(TEXT("wenet")))
+		else if (ModelName.Contains(TEXT("funasr-nano")))
+			{
+				recognizer_config.feat_config.sample_rate = 0;
+				recognizer_config.feat_config.feature_dim = 0;
+				SHERPA_REQUIRED_PATH(config.funasr_nano.encoder_adaptor, "funasr_nano.encoder_adaptor", Node_File);
+				SHERPA_REQUIRED_PATH(config.funasr_nano.embedding, "funasr_nano.embedding", Node_File);
+				SHERPA_REQUIRED_PATH(config.funasr_nano.llm, "funasr_nano.llm", Node_File);
+				SHERPA_REQUIRED_PATH(config.funasr_nano.tokenizer, "funasr_nano.tokenizer", Node_Dir);
+				config.funasr_nano.itn = Helper.GetInt("funasr_nano.itn");
+			}
+			else if (ModelName.Contains(TEXT("cohere-transcribe")))
+			{
+				recognizer_config.feat_config.sample_rate = 0;
+				recognizer_config.feat_config.feature_dim = 0;
+				SHERPA_REQUIRED_PATH(config.tokens, "cohere_transcribe.tokens", Node_File);
+				SHERPA_REQUIRED_PATH(config.cohere_transcribe.encoder, "cohere_transcribe.encoder", Node_File);
+				SHERPA_REQUIRED_PATH(config.cohere_transcribe.decoder, "cohere_transcribe.decoder", Node_File);
+				config.cohere_transcribe.language = Helper.GetStr("cohere_transcribe.language", NullIfEmpty);
+				config.cohere_transcribe.use_punct = Helper.GetInt("cohere_transcribe.use_punct");
+				config.cohere_transcribe.use_itn = Helper.GetInt("cohere_transcribe.use_itn");
+			}
+			else if (ModelName.Contains(TEXT("qwen3-asr")))
+			{
+				recognizer_config.feat_config.sample_rate = 0;
+				recognizer_config.feat_config.feature_dim = 0;
+				SHERPA_REQUIRED_PATH(config.qwen3_asr.conv_frontend, "qwen3_asr.conv_frontend", Node_File);
+				SHERPA_REQUIRED_PATH(config.qwen3_asr.encoder, "qwen3_asr.encoder", Node_File);
+				SHERPA_REQUIRED_PATH(config.qwen3_asr.decoder, "qwen3_asr.decoder", Node_File);
+				SHERPA_REQUIRED_PATH(config.qwen3_asr.tokenizer, "qwen3_asr.tokenizer", Node_Dir);
+				config.qwen3_asr.max_total_len = Helper.GetInt("qwen3_asr.max_total_len");
+				config.qwen3_asr.max_new_tokens = Helper.GetInt("qwen3_asr.max_new_tokens");
+				config.qwen3_asr.temperature = Helper.GetFloat("qwen3_asr.temperature");
+				config.qwen3_asr.top_p = Helper.GetFloat("qwen3_asr.top_p");
+				config.qwen3_asr.seed = Helper.GetInt("qwen3_asr.seed");
+				const char* Hotwords = Helper.GetStr("qwen3_asr.hotwords", NullIfEmpty);
+				if (Hotwords) config.qwen3_asr.hotwords = Hotwords;
+			}
+			else if (ModelName.Contains(TEXT("wenet")))
 		{
 			SHERPA_REQUIRED_PATH(config.tokens, "wenet_ctc.tokens", Node_File);
 			SHERPA_REQUIRED_PATH(config.wenet_ctc.model, "wenet_ctc.model", Node_File);
@@ -489,7 +550,7 @@ bool UHMISpeechToText_Sherpa::Proc_DoWork(int& QueueLength)
 				break;
 			}
 
-			SHERPA_CALL(SherpaOnnxAcceptWaveformOffline, (OfflineStream, SampleRate, InputPcmF32.GetData(), InputPcmF32.Num()));
+			SHERPA_CALL(SherpaOnnxAcceptWaveformOffline, (OfflineStream, ModelSampleRate, InputPcmF32.GetData(), InputPcmF32.Num()));
 			HMI_BREAK_ON_CANCEL();
 
 			LanguageResult = SHERPA_CALL(SherpaOnnxSpokenLanguageIdentificationCompute, (LanguageDetector, OfflineStream));
@@ -513,7 +574,7 @@ bool UHMISpeechToText_Sherpa::Proc_DoWork(int& QueueLength)
 				break;
 			}
 
-			SHERPA_CALL(SherpaOnnxAcceptWaveformOffline, (OfflineStream, SampleRate, InputPcmF32.GetData(), InputPcmF32.Num()));
+			SHERPA_CALL(SherpaOnnxAcceptWaveformOffline, (OfflineStream, ModelSampleRate, InputPcmF32.GetData(), InputPcmF32.Num()));
 			HMI_BREAK_ON_CANCEL();
 
 			SHERPA_CALL(SherpaOnnxDecodeOfflineStream, (OfflineRecognizer, OfflineStream));
@@ -538,7 +599,7 @@ bool UHMISpeechToText_Sherpa::Proc_DoWork(int& QueueLength)
 		}
 		else if (OnlineRecognizer)
 		{
-			SHERPA_CALL(SherpaOnnxOnlineStreamAcceptWaveform, (OnlineStream, SampleRate, InputPcmF32.GetData(), InputPcmF32.Num()));
+			SHERPA_CALL(SherpaOnnxOnlineStreamAcceptWaveform, (OnlineStream, ModelSampleRate, InputPcmF32.GetData(), InputPcmF32.Num()));
 			HMI_BREAK_ON_CANCEL();
 
 			while (!CancelFlag && SHERPA_CALL(SherpaOnnxIsOnlineStreamReady, (OnlineRecognizer, OnlineStream)))

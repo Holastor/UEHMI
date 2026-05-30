@@ -84,6 +84,14 @@ UHMITextToSpeech_Sherpa::UHMITextToSpeech_Sherpa(const FObjectInitializer& Objec
 	SetProcessorParam("kitten.voices", DefVoices);
 	SetProcessorParam("kitten.tokens", DefTokens);
 	SetProcessorParam("kitten.length_scale", 1.0f);
+
+	SetProcessorParam("supertonic.duration_predictor", TEXT("duration_predictor.int8.onnx"));
+	SetProcessorParam("supertonic.text_encoder", TEXT("text_encoder.int8.onnx"));
+	SetProcessorParam("supertonic.vector_estimator", TEXT("vector_estimator.int8.onnx"));
+	SetProcessorParam("supertonic.vocoder", TEXT("vocoder.int8.onnx"));
+	SetProcessorParam("supertonic.tts_json", TEXT("tts.json"));
+	SetProcessorParam("supertonic.unicode_indexer", TEXT("unicode_indexer.bin"));
+	SetProcessorParam("supertonic.voice_style", TEXT("voice.bin"));
 }
 
 UHMITextToSpeech_Sherpa::~UHMITextToSpeech_Sherpa()
@@ -179,7 +187,17 @@ bool UHMITextToSpeech_Sherpa::Proc_Init()
 
 		config.model.kitten.length_scale = Helper.GetFloat("kitten.length_scale");
 	}
-	// zipvoice
+	else if (ModelName.Contains(TEXT("supertonic")))
+	{
+		SHERPA_REQUIRED_PATH(config.model.supertonic.duration_predictor, "supertonic.duration_predictor", Node_File);
+		SHERPA_REQUIRED_PATH(config.model.supertonic.text_encoder, "supertonic.text_encoder", Node_File);
+		SHERPA_REQUIRED_PATH(config.model.supertonic.vector_estimator, "supertonic.vector_estimator", Node_File);
+		SHERPA_REQUIRED_PATH(config.model.supertonic.vocoder, "supertonic.vocoder", Node_File);
+		SHERPA_REQUIRED_PATH(config.model.supertonic.tts_json, "supertonic.tts_json", Node_File);
+		SHERPA_REQUIRED_PATH(config.model.supertonic.unicode_indexer, "supertonic.unicode_indexer", Node_File);
+
+		config.model.supertonic.voice_style = Helper.GetPath("supertonic.voice_style", Node_File);
+	}
 	else
 	{
 		ProcError(FString::Printf(TEXT("Unsupported model: %s"), *ModelName));
